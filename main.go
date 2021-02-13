@@ -136,7 +136,7 @@ func grepReader(path string, reader io.Reader, rx *regexp.Regexp, plock *sync.Mu
 				if i+1 < lm {
 					nextl := ms[i+1][0]
 					if nextl < rightLim {
-						rightLim = nextl - 1
+						rightLim = nextl
 					}
 				}
 				b := formatLine(l[oleft:rightLim], left-oleft, right-oleft, linenum, i)
