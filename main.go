@@ -15,15 +15,10 @@ import (
 	"github.com/logrusorgru/aurora"
 )
 
-// command line flags
 var (
 	file = flag.String("f", "", "file path regular expression (including extension)")
 	help = flag.Bool("h", false, "help")
 )
-
-// var (
-// 	dirNames = flag.Bool("d", false, "use directory names")
-// )
 
 var (
 	whiteSpace   = regexp.MustCompile("[\\s]+")
@@ -35,40 +30,50 @@ func main() {
 	var err error
 	var fprx *regexp.Regexp
 	var rx *regexp.Regexp
+	plock := new(sync.Mutex)
+	wg := new(sync.WaitGroup)
 
 	flag.Parse()
 	if *help {
 		flag.PrintDefaults()
 		return
 	}
-	args := flag.Args()
+
+	in, err := os.Stdin.Stat()
+	if err != nil {
+		log.Fatal(err)
+	}
+	isPipe := in.Mode()&os.ModeNamedPipe != 0
 
 	if len(*file) != 0 {
 		fprx, err = regexp.Compile("(?i)" + *file)
 		if err != nil {
-			log.Fatalf("inavlid regex %s", err.Error())
+			log.Fatalf("invalid regex %s", err.Error())
 		}
 	}
 
+	args := flag.Args()
 	if len(args) == 0 {
-		if fprx == nil { // else, this is a file search
+		if fprx == nil || isPipe {
 			log.Fatal("no arguments provided")
 		}
 	} else {
 		rx, err = regexp.Compile("(?i)" + args[0])
+		if err != nil {
+			log.Fatalf("invalid regex %s", err.Error())
+		}
 	}
 
-	if err != nil {
-		log.Fatalf("inavlid regex %s", err.Error())
+	if isPipe {
+		grepReader("STDIN", os.Stdin, rx, plock)
+		return
 	}
 
 	root, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-	//	ch := make(chan string)
-	plock := &sync.Mutex{}
-	wg := &sync.WaitGroup{}
+
 	wg.Add(1)
 	handleGrep(root, rx, fprx, wg, plock)
 	wg.Wait()
@@ -94,32 +99,8 @@ func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 	return err
 }
 
-func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex) {
-	defer wg.Done()
-	if fprx != nil && !fprx.MatchString(path) {
-		return
-	}
-	if rx == nil {
-		ms := fprx.FindAllStringIndex(path, -1)
-		last := 0
-		plock.Lock()
-		defer plock.Unlock()
-		for _, m := range ms {
-			l, r := m[0], m[1]
-			fmt.Printf("%s%s", path[last:l], aurora.Bold(aurora.Blue(path[l:r])))
-			last = r
-		}
-		fmt.Printf("%s\n", path[last:])
-		return
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer f.Close()
-	r := bufio.NewReader(f)
+func grepReader(path string, reader io.Reader, rx *regexp.Regexp, plock *sync.Mutex) {
+	r := bufio.NewReader(reader)
 	linenum := 0
 	lines := make([]string, 0)
 
@@ -167,15 +148,43 @@ func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 			}
 		}
 	}
+
 	if ln := len(lines); ln > 0 {
 		plock.Lock()
 		defer plock.Unlock()
 		fmt.Print(formatHeader(path, ln))
-
 		for _, l := range lines {
 			fmt.Print(l)
 		}
 	}
+}
+
+func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex) {
+	defer wg.Done()
+	if fprx != nil && !fprx.MatchString(path) {
+		return
+	}
+	if rx == nil {
+		ms := fprx.FindAllStringIndex(path, -1)
+		last := 0
+		plock.Lock()
+		defer plock.Unlock()
+		for _, m := range ms {
+			l, r := m[0], m[1]
+			fmt.Printf("%s%s", path[last:l], aurora.Bold(aurora.Blue(path[l:r])))
+			last = r
+		}
+		fmt.Printf("%s\n", path[last:])
+		return
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer f.Close()
+	grepReader(path, f, rx, plock)
 }
 
 func formatHeader(path string, num int) string {
