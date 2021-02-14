@@ -11,12 +11,20 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/logrusorgru/aurora"
 )
 
+const (
+	fileLimit      uint  = 1024
+	allocBufferLen uint  = 64
+	longFileLim    int64 = 5 * 1024 * 1024
+)
+
 var (
 	file = flag.String("f", "", "file path regular expression (including extension)")
+	long = flag.Bool("long", false, "search long files (>5mb)")
 	help = flag.Bool("h", false, "help")
 )
 
@@ -24,6 +32,7 @@ var (
 	whiteSpace   = regexp.MustCompile("[\\s]+")
 	leadingSpace = regexp.MustCompile("^[\\s]+")
 	ignorePath   = regexp.MustCompile("(.git|node_modules)$")
+	tooManyOpen  = regexp.MustCompile("too many open files")
 )
 
 func main() {
@@ -74,12 +83,13 @@ func main() {
 		log.Fatal(err)
 	}
 
+	sem := make(chan struct{}, fileLimit)
 	wg.Add(1)
-	handleGrep(root, rx, fprx, wg, plock)
+	handleGrep(root, rx, fprx, wg, plock, sem)
 	wg.Wait()
 }
 
-func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex) error {
+func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex, sem chan struct{}) error {
 	defer wg.Done()
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() && path != root {
@@ -87,12 +97,18 @@ func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 				return filepath.SkipDir
 			}
 			wg.Add(1)
-			go handleGrep(path, rx, fprx, wg, plock)
+			go handleGrep(path, rx, fprx, wg, plock, sem)
 			return filepath.SkipDir
 		}
 		if info.Mode().IsRegular() {
+			if !*long && info.Size() > longFileLim {
+				plock.Lock()
+				fmt.Printf("skipping large file %s\n", path)
+				plock.Unlock()
+				return nil
+			}
 			wg.Add(1)
-			go searchFile(path, rx, fprx, wg, plock)
+			go searchFile(path, rx, fprx, wg, plock, sem)
 		}
 		return nil
 	})
@@ -102,7 +118,7 @@ func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 func grepReader(path string, reader io.Reader, rx *regexp.Regexp, plock *sync.Mutex) {
 	r := bufio.NewReader(reader)
 	linenum := 0
-	lines := make([]string, 0)
+	lines := make([]string, 0, allocBufferLen)
 
 	for {
 		l, err := r.ReadBytes('\n')
@@ -148,7 +164,6 @@ func grepReader(path string, reader io.Reader, rx *regexp.Regexp, plock *sync.Mu
 			}
 		}
 	}
-
 	if ln := len(lines); ln > 0 {
 		plock.Lock()
 		defer plock.Unlock()
@@ -157,9 +172,10 @@ func grepReader(path string, reader io.Reader, rx *regexp.Regexp, plock *sync.Mu
 			fmt.Print(l)
 		}
 	}
+	lines = nil
 }
 
-func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex) {
+func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex, sem chan struct{}) {
 	defer wg.Done()
 	if fprx != nil && !fprx.MatchString(path) {
 		return
@@ -177,11 +193,24 @@ func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 		fmt.Printf("%s\n", path[last:])
 		return
 	}
+	sem <- struct{}{}
+	defer func(sem chan struct{}) {
+		<-sem
+	}(sem)
 
-	f, err := os.Open(path)
-	if err != nil {
-		log.Println(err)
-		return
+	var f *os.File
+	var err error
+	for {
+		f, err = os.Open(path)
+		if err != nil {
+			if !tooManyOpen.MatchString(err.Error()) {
+				log.Println(err)
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		break
 	}
 	defer f.Close()
 	grepReader(path, f, rx, plock)
