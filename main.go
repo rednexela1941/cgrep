@@ -101,10 +101,8 @@ func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 			return filepath.SkipDir
 		}
 		if info.Mode().IsRegular() {
-			if !*long && info.Size() > longFileLim {
-				plock.Lock()
+			if !*long && info.Size() > longFileLim && (fprx == nil || fprx.MatchString(path)) {
 				fmt.Printf("skipping large file %s\n", path)
-				plock.Unlock()
 				return nil
 			}
 			wg.Add(1)
