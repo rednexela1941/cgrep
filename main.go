@@ -22,10 +22,13 @@ const (
 	longFileLim    int64 = 5 * 1024 * 1024
 )
 
+var colors aurora.Aurora
+
 var (
-	file = flag.String("f", "", "file path regular expression (including extension)")
-	long = flag.Bool("long", false, "search long files (>5mb)")
-	help = flag.Bool("h", false, "help")
+	file    = flag.String("f", "", "file path regular expression (including extension)")
+	long    = flag.Bool("long", false, "search long files (>5mb)")
+	noColor = flag.Bool("no-color", false, "disable colored output")
+	help    = flag.Bool("h", false, "help")
 )
 
 var (
@@ -43,6 +46,13 @@ func main() {
 	wg := new(sync.WaitGroup)
 
 	flag.Parse()
+	outStat, err := os.Stdout.Stat()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	colors = aurora.NewAurora(outStat.Mode()&os.ModeNamedPipe == 0 && !*noColor)
+
 	if *help {
 		flag.PrintDefaults()
 		return
@@ -185,7 +195,7 @@ func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 		defer plock.Unlock()
 		for _, m := range ms {
 			l, r := m[0], m[1]
-			fmt.Printf("%s%s", path[last:l], aurora.Bold(aurora.Blue(path[l:r])))
+			fmt.Printf("%s%s", path[last:l], colors.Bold(colors.Blue(path[l:r])))
 			last = r
 		}
 		fmt.Printf("%s\n", path[last:])
@@ -215,17 +225,17 @@ func searchFile(path string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock 
 }
 
 func formatHeader(path string, num int) string {
-	return fmt.Sprintf("%s (%d matches)\n", aurora.Green(path), num)
+	return fmt.Sprintf("%s (%d matches)\n", colors.Green(path), num)
 }
 
 func formatLine(line []byte, l, r, linenum, i int) string {
 	s := fmt.Sprintf("%s%s%s",
 		line[0:l],
-		aurora.Bold(aurora.Blue(line[l:r])),
+		colors.Bold(colors.Blue(line[l:r])),
 		line[r:],
 	)
 	if i == 0 {
-		s = fmt.Sprintf("%s:\t", aurora.BrightBlack(strconv.Itoa(linenum))) + s
+		s = fmt.Sprintf("%s:\t", colors.BrightBlack(strconv.Itoa(linenum))) + s
 	}
 	return s
 }
