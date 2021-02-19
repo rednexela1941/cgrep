@@ -28,6 +28,7 @@ var (
 	file    = flag.String("f", "", "file path regular expression (including extension)")
 	long    = flag.Bool("long", false, "search long files (>5mb)")
 	noColor = flag.Bool("no-color", false, "disable colored output")
+	color   = flag.Bool("color", false, "enable colored output")
 	help    = flag.Bool("h", false, "help")
 )
 
@@ -51,7 +52,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	colors = aurora.NewAurora(outStat.Mode()&os.ModeNamedPipe == 0 && !*noColor)
+	colors = aurora.NewAurora((outStat.Mode()&os.ModeNamedPipe == 0 && !*noColor) || *color)
 
 	if *help {
 		flag.PrintDefaults()
