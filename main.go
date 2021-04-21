@@ -29,6 +29,7 @@ var (
 	long    = flag.Bool("long", false, "search long files (>5mb)")
 	noColor = flag.Bool("no-color", false, "disable colored output")
 	color   = flag.Bool("color", false, "enable colored output")
+	dir     = flag.String("dir", "", "starting directory path")
 	help    = flag.Bool("h", false, "help")
 )
 
@@ -89,9 +90,12 @@ func main() {
 		return
 	}
 
-	root, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
+	root := *dir
+	if len(root) == 0 {
+		root, err = os.Getwd()
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	sem := make(chan struct{}, fileLimit)
@@ -103,6 +107,9 @@ func main() {
 func handleGrep(root string, rx, fprx *regexp.Regexp, wg *sync.WaitGroup, plock *sync.Mutex, sem chan struct{}) error {
 	defer wg.Done()
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Fatal(err)
+		}
 		if info.IsDir() && path != root {
 			if ignorePath.MatchString(path) {
 				return filepath.SkipDir
